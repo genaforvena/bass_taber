@@ -1,9 +1,14 @@
 import argparse
-import sys
+import tensorflow as tf
+tf.compat.v1.disable_eager_execution()
 import librosa
-import numpy as np
+from spleeter.separator import Separator
+import crepe
+import sys
 import yt_dlp
 import os
+
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
 
 def download_video(url, output_path, progress_callback=None):
@@ -39,7 +44,23 @@ def download_video(url, output_path, progress_callback=None):
                 return f"Error: File not found after download: {final_filename}"
     except Exception as e:
         return f"Error: {str(e)}"
-    
+
+
+def isolate_bass(input_file):
+    separator = Separator('spleeter:4stems')
+    output_dir = 'output'
+    separator.separate_to_file(input_file, output_dir)
+    # Return the path to the isolated bass file
+    bass_file = os.path.join(output_dir, os.path.splitext(os.path.basename(input_file))[0], 'bass.wav')
+    return bass_file
+
+def detect_pitches(audio_path):
+    audio, sr = librosa.load(audio_path, sr=16000)
+    graph = tf.Graph()
+    with graph.as_default():
+        _, frequency, confidence, _ = crepe.predict(audio, sr=sr, viterbi=True)
+    return frequency, confidence
+
 
 def main():
     # Set up the argument parser
@@ -53,60 +74,10 @@ def main():
 
     if "https" in audio_path:
         audio_path = download_video(audio_path, "downloads")
-    # Load the audio file
-    try:
-        y, sr = librosa.load(audio_path, sr=None, mono=True)
-    except FileNotFoundError:
-        print(f"Error: File '{audio_path}' not found.")
-        sys.exit(1)
-    except Exception as e:
-        print(f"Error loading audio file: {e}")
-        sys.exit(1)
 
-    # Perform harmonic-percussive source separation
-    y_harmonic, y_percussive = librosa.effects.hpss(y)
-
-    # Further isolate bass frequencies using frequency masking on the harmonic component
-    # Create a spectrogram
-    S = np.abs(librosa.stft(y_harmonic))
-
-    # Apply a mask to keep only bass frequencies (e.g., below 250 Hz)
-    freqs = librosa.fft_frequencies(sr=sr)
-    bass_freqs = freqs <= 250
-    S_bass = S * bass_freqs[:, np.newaxis]
-
-    # Invert the spectrogram to get the bass signal
-    y_bass = librosa.istft(S_bass * np.exp(1j * np.angle(librosa.stft(y_harmonic))))
-
-    # Onset detection to find note beginnings
-    hop_length = 512
-    onset_env = librosa.onset.onset_strength(y=y_bass, sr=sr, hop_length=hop_length)
-    onset_frames = librosa.onset.onset_detect(onset_envelope=onset_env, sr=sr, hop_length=hop_length)
-
-    # Convert frame indices to timestamps
-    onset_times = librosa.frames_to_time(onset_frames, sr=sr, hop_length=hop_length)
-
-    # Estimate pitches at each onset
-    pitches = []
-    for onset in onset_frames:
-        # Get a short window around the onset
-        start = onset
-        end = onset + 2  # Adjust the window size as needed
-        y_slice = y_bass[int(start * hop_length):int(end * hop_length)]
-        # Estimate pitch
-        pitch, mag = librosa.piptrack(y=y_slice, sr=sr)
-        # Find the highest magnitude bin
-        mag = mag.flatten()
-        pitch = pitch.flatten()
-        index = mag.argmax()
-        frequency = pitch[index]
-        # Handle cases where pitch detection fails
-        if frequency == 0 or np.isnan(frequency):
-            pitches.append(None)
-        else:
-            # Convert frequency to MIDI note
-            midi_note = librosa.hz_to_midi(frequency)
-            pitches.append(midi_note)
+    bass_file = isolate_bass(audio_path)
+    pitches = detect_pitches(bass_file)
+    print("Detected Pitches:", pitches)
 
     # Map MIDI notes to bass guitar strings and frets
     # Standard bass tuning: E1 (40), A1 (45), D2 (50), G2 (55)
@@ -152,8 +123,6 @@ def main():
         for s in range(4):
             line_segment = tab_chars[s][start:end]
             segment_lines[s] += line_segment
-            # Reverse the order of strings to match standard tab notation
-            segment_lines = segment_lines[::-1]
         # Add the segment to the output
         output_lines.extend(segment_lines)
         output_lines.append('')  # Add an empty line between segments
@@ -172,7 +141,8 @@ def main():
         print(f"Bass tabs have been written to '{output_file}'.")
     except Exception as e:
         print(f"Error writing to file: {e}")
-        sys.exit(1)        
-    
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     main()

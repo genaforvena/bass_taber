@@ -1,5 +1,5 @@
-sys
 librosa
-numpy as np
+numpy 
 yt_dlp
-os
+spleeter
+crepe
