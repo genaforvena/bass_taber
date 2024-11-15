@@ -63,20 +63,24 @@ def main():
         print(f"Error loading audio file: {e}")
         sys.exit(1)
 
-    # Apply a low-pass filter to isolate bass frequencies
-    def low_pass_filter(signal, sr, cutoff=200):
-        fft = np.fft.fft(signal)
-        frequencies = np.fft.fftfreq(len(fft))
-        cutoff_idx = np.abs(frequencies * sr) > cutoff
-        fft[cutoff_idx] = 0
-        filtered_signal = np.fft.ifft(fft)
-        return filtered_signal.real
+    # Perform harmonic-percussive source separation
+    y_harmonic, y_percussive = librosa.effects.hpss(y)
 
-    y_filtered = low_pass_filter(y, sr)
+    # Further isolate bass frequencies using frequency masking on the harmonic component
+    # Create a spectrogram
+    S = np.abs(librosa.stft(y_harmonic))
+
+    # Apply a mask to keep only bass frequencies (e.g., below 250 Hz)
+    freqs = librosa.fft_frequencies(sr=sr)
+    bass_freqs = freqs <= 250
+    S_bass = S * bass_freqs[:, np.newaxis]
+
+    # Invert the spectrogram to get the bass signal
+    y_bass = librosa.istft(S_bass * np.exp(1j * np.angle(librosa.stft(y_harmonic))))
 
     # Onset detection to find note beginnings
     hop_length = 512
-    onset_env = librosa.onset.onset_strength(y=y_filtered, sr=sr, hop_length=hop_length)
+    onset_env = librosa.onset.onset_strength(y=y_bass, sr=sr, hop_length=hop_length)
     onset_frames = librosa.onset.onset_detect(onset_envelope=onset_env, sr=sr, hop_length=hop_length)
 
     # Convert frame indices to timestamps
@@ -88,7 +92,7 @@ def main():
         # Get a short window around the onset
         start = onset
         end = onset + 2  # Adjust the window size as needed
-        y_slice = y_filtered[int(start * hop_length):int(end * hop_length)]
+        y_slice = y_bass[int(start * hop_length):int(end * hop_length)]
         # Estimate pitch
         pitch, mag = librosa.piptrack(y=y_slice, sr=sr)
         # Find the highest magnitude bin
@@ -148,6 +152,8 @@ def main():
         for s in range(4):
             line_segment = tab_chars[s][start:end]
             segment_lines[s] += line_segment
+            # Reverse the order of strings to match standard tab notation
+            segment_lines = segment_lines[::-1]
         # Add the segment to the output
         output_lines.extend(segment_lines)
         output_lines.append('')  # Add an empty line between segments
@@ -167,6 +173,6 @@ def main():
     except Exception as e:
         print(f"Error writing to file: {e}")
         sys.exit(1)        
-        
+    
 if __name__ == "__main__":
     main()
