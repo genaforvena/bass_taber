@@ -1,3 +1,11 @@
 venv/
 downloads/
 *.txt
+output/
+*.mp3
+*.wav
+*.ogg
+*.m4a
+*.flac
+pretrained_models/
+=1.22

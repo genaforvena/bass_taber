@@ -3,3 +3,4 @@ numpy
 yt_dlp
 spleeter
 crepe
+tensorflow

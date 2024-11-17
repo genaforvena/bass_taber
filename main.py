@@ -3,6 +3,7 @@ import tensorflow as tf
 tf.compat.v1.disable_eager_execution()
 import librosa
 from spleeter.separator import Separator
+import numpy as np
 import crepe
 import sys
 import yt_dlp
@@ -76,8 +77,20 @@ def main():
         audio_path = download_video(audio_path, "downloads")
 
     bass_file = isolate_bass(audio_path)
-    pitches = detect_pitches(bass_file)
-    print("Detected Pitches:", pitches)
+    frequency, confidence = detect_pitches(bass_file)
+
+    # Convert frequency to MIDI notes
+    def frequency_to_midi(frequency):
+        # Avoid log of zero or negative frequencies
+        with np.errstate(divide='ignore', invalid='ignore'):
+            midi_notes = 69 + 12 * np.log2(frequency / 440.0)
+        # Replace invalid values with NaN
+        midi_notes = np.where(np.isfinite(midi_notes), midi_notes, np.nan)
+        return midi_notes
+
+    midi_notes = frequency_to_midi(frequency)
+
+    print("Detected MIDI Notes:", midi_notes)
 
     # Map MIDI notes to bass guitar strings and frets
     # Standard bass tuning: E1 (40), A1 (45), D2 (50), G2 (55)
@@ -88,13 +101,14 @@ def main():
     spacing = 3  # Spacing between notes
 
     # Build the tab characters
-    for i, midi_note in enumerate(pitches):
+    for i, midi_note in enumerate(midi_notes):
         # Add spacing for each string
         for s in range(4):
             tab_chars[s] += '-' * spacing
 
-        if midi_note is None:
-            continue  # Skip if no pitch was detected
+        # Skip if no pitch was detected
+        if np.isnan(midi_note):
+            continue
 
         fret = None
         string = None
